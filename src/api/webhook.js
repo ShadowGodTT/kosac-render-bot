@@ -35,11 +35,8 @@ const getMatchingProducts = async (userMessage) => {
     const matchedProducts = products
       .filter(product => {
         const title = product.title?.toLowerCase() || '';
-        const desc = product.body_html?.toLowerCase() || '';
-
-        // Match if any keyword exists in title or description
         return keywords.some(word =>
-          title.includes(word) || desc.includes(word)
+          title.includes(word)
         );
       })
       .map(product => ({
@@ -69,7 +66,7 @@ app.post('/webhook', async (req, res) => {
   // 🟢 Greeting Handler
   const greetings = ["hi", "hello", "hey", "namaste", "good morning", "good evening"];
   if (greetings.some(greet => userMessage.toLowerCase().includes(greet))) {
-    const greetingReply = `👋 Hello! Welcome to *Kosac* – your eco-friendly packaging partner.\n\nYou can type things like:\n• kraft bags\n• silver container\n• paper bowls\n\nI'll help you find the right product instantly!`;
+    const greetingReply = `👋 Hello! Welcome to *Kosac* – your eco-friendly packaging partner.\n\nYou can type things like:\n• kraft bags\n• silver container\n• paper bowls\n• paper cups\n• straws\n\nI'll help you find the right product instantly!`;
 
     await axios.post(`https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`, {
       messaging_product: 'whatsapp',
@@ -85,7 +82,7 @@ app.post('/webhook', async (req, res) => {
     return res.sendStatus(200);
   }
 
-  // 🔍 Search for matching products
+  // 🔍 Product Search
   try {
     const matches = await getMatchingProducts(userMessage);
 
@@ -93,7 +90,10 @@ app.post('/webhook', async (req, res) => {
       let reply = `Here are some products matching “${userMessage}”:\n\n`;
 
       matches.slice(0, 5).forEach((p, index) => {
-        reply += `${index + 1}️⃣ *${p.title}* – ₹${p.price}/kg\n🔗 https://kosac.in/products/${p.handle}\n\n`;
+        const isBoxUnit = /cup|straw/i.test(p.title);
+        const unit = isBoxUnit ? "box" : "kg";
+
+        reply += `${index + 1}️⃣ *${p.title}* – ₹${p.price}/${unit}\n🔗 https://kosac.in/products/${p.handle}\n\n`;
       });
 
       await axios.post(`https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`, {
