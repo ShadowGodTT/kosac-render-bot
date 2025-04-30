@@ -15,7 +15,7 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 const embeddingsPath = path.join(__dirname, 'product-embeddings.json');
 const productData = require(path.join(__dirname, 'product-data.json'));
-const productEmbeddings = require(embeddingsPath);
+const productEmbeddings = require('./product-embeddings.json');
 
 app.use(express.json());
 
@@ -82,7 +82,7 @@ app.post('/webhook', async (req, res) => {
           'Content-Type': 'application/json'
         }
       });
-        
+
       console.log('✅ AI-based product reply sent');
     } else {
       await axios.post(`https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`, {
