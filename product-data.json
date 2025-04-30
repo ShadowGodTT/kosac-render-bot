@@ -1,0 +1,21 @@
+[
+    {
+      "title": "Brown Kraft Paper Bag",
+      "description": "Eco-friendly kraft bag for dry snacks and oily food",
+      "handle": "brown-kraft-paper-bag",
+      "price": "120"
+    },
+    {
+      "title": "Leakproof Food Bowl",
+      "description": "Tightly sealed bowl for liquid and gravy items",
+      "handle": "leakproof-food-bowl",
+      "price": "220"
+    },
+    {
+      "title": "Disposable Paper Cups",
+      "description": "Paper cups for hot and cold beverages",
+      "handle": "disposable-paper-cups",
+      "price": "100"
+    }
+  ]
+  
