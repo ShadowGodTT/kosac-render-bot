@@ -1,6 +1,7 @@
 const express = require('express');
 const axios = require('axios');
 const path = require('path');
+const { v4: uuidv4 } = require('uuid');
 
 require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 
@@ -12,9 +13,11 @@ const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
 const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 const SHOPIFY_STORE_URL = process.env.SHOPIFY_STORE_URL;
+const RAZORPAY_API_KEY = process.env.RAZORPAY_API_KEY;
+const RAZORPAY_API_SECRET = process.env.RAZORPAY_API_SECRET;
 
-const userSessions = {};  // Tracks current order session step
-const userProfiles = {};  // Stores saved name, shop, address
+const userSessions = {};
+const userProfiles = {};
 
 app.use(express.json());
 
@@ -47,150 +50,7 @@ const getMatchingProducts = async (userMessage) => {
   }
 };
 
-app.post('/webhook', async (req, res) => {
-  const message = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
-  const phoneNumber = message?.from;
-  const userMessage = message?.text?.body || '';
-  const buttonId = message?.interactive?.button_reply?.id;
-
-  if (!phoneNumber) return res.sendStatus(200);
-
-  const session = userSessions[phoneNumber] || {};
-  const profile = userProfiles[phoneNumber];
-
-  // 🟢 Greeting
-  const greetings = ["hi", "hello", "hey", "namaste", "good morning", "good evening"];
-  if (greetings.some(greet => userMessage.toLowerCase().includes(greet))) {
-    const greetingReply = `👋 Hello! Welcome to *Kosac* – your eco-friendly packaging partner.\n\nYou can type things like:\n• kraft bags\n• silver container\n• paper bowls\n• paper cups\n• straws\n\nI'll help you find the right product instantly!`;
-
-    await sendText(phoneNumber, greetingReply);
-    return res.sendStatus(200);
-  }
-
-  // 🛒 Button tapped
-  if (buttonId && buttonId.startsWith('order_')) {
-    const handle = buttonId.replace('order_', '');
-    userSessions[phoneNumber] = {
-      step: 'awaiting_quantity',
-      productHandle: handle
-    };
-
-    await sendText(phoneNumber, `How many kg or boxes of *${handle.replace(/-/g, ' ')}* would you like to order?`);
-    return res.sendStatus(200);
-  }
-
-  // Step: quantity
-  if (session.step === 'awaiting_quantity') {
-    userSessions[phoneNumber].quantity = userMessage;
-
-    if (userProfiles[phoneNumber]) {
-      const p = userProfiles[phoneNumber];
-      await sendText(phoneNumber,
-        `You've previously ordered as *${p.name}* from *${p.shop}*, 📍 *${p.address}*.\nWould you like to use these saved details?\n\nReply:\n✅ Yes - to use same details\n✏️ Update - to enter new ones`);
-      session.step = 'confirm_saved_info';
-    } else {
-      session.step = 'awaiting_name';
-      await sendText(phoneNumber, `Please enter your full name:`);
-    }
-
-    return res.sendStatus(200);
-  }
-
-  // Step: use saved info or update
-  if (session.step === 'confirm_saved_info') {
-    const msg = userMessage.toLowerCase();
-    if (msg.includes("yes")) {
-      const { productHandle, quantity } = session;
-      const { name, shop, address } = profile;
-
-      await confirmOrder(phoneNumber, productHandle, quantity, name, shop, address);
-      delete userSessions[phoneNumber];
-      return res.sendStatus(200);
-    } else {
-      session.step = 'awaiting_name';
-      await sendText(phoneNumber, `No problem! Please enter your full name:`);
-      return res.sendStatus(200);
-    }
-  }
-
-  // Step: name
-  if (session.step === 'awaiting_name') {
-    session.name = userMessage;
-    session.step = 'awaiting_shop';
-    await sendText(phoneNumber, `Thanks, ${userMessage}. Now please enter your *shop name*:`);
-    return res.sendStatus(200);
-  }
-
-  // Step: shop
-  if (session.step === 'awaiting_shop') {
-    session.shop = userMessage;
-    session.step = 'awaiting_address';
-    await sendText(phoneNumber, `And finally, enter your *delivery address*:`);
-    return res.sendStatus(200);
-  }
-
-  // Step: address + confirm order
-  if (session.step === 'awaiting_address') {
-    session.address = userMessage;
-    const { productHandle, quantity, name, shop, address } = session;
-
-    // Save profile
-    userProfiles[phoneNumber] = { name, shop, address };
-
-    await confirmOrder(phoneNumber, productHandle, quantity, name, shop, address);
-    delete userSessions[phoneNumber];
-    return res.sendStatus(200);
-  }
-
-  // Default: product search
-  try {
-    const matches = await getMatchingProducts(userMessage);
-    if (matches.length > 0) {
-      for (let p of matches.slice(0, 5)) {
-        const isBoxUnit = /cup|straw/i.test(p.title);
-        const unit = isBoxUnit ? "box" : "kg";
-
-        await axios.post(`https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`, {
-          messaging_product: 'whatsapp',
-          to: phoneNumber,
-          type: 'interactive',
-          interactive: {
-            type: 'button',
-            body: {
-              text: `🛍️ *${p.title}*\n💵 ₹${p.price}/${unit}\n🔗 https://kosac.in/products/${p.handle}`
-            },
-            action: {
-              buttons: [
-                {
-                  type: 'reply',
-                  reply: {
-                    id: `order_${p.handle}`,
-                    title: '🛒 Order This'
-                  }
-                }
-              ]
-            }
-          }
-        }, {
-          headers: {
-            Authorization: `Bearer ${ACCESS_TOKEN}`,
-            'Content-Type': 'application/json'
-          }
-        });
-      }
-      return res.sendStatus(200);
-    } else {
-      await sendText(phoneNumber, `❌ No matching product found for “${userMessage}”. Try something like "kraft bag", "paper bowl", or "container".`);
-      return res.sendStatus(200);
-    }
-  } catch (error) {
-    console.error('❌ WhatsApp send error:', error.response?.data || error.message);
-    return res.sendStatus(500);
-  }
-});
-
-// Send plain text message
-async function sendText(phone, text) {
+const sendText = async (phone, text) => {
   await axios.post(`https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`, {
     messaging_product: 'whatsapp',
     to: phone,
@@ -201,36 +61,195 @@ async function sendText(phone, text) {
       'Content-Type': 'application/json'
     }
   });
-}
+};
 
-// Confirm order
-async function confirmOrder(phone, handle, quantity, name, shop, address) {
-  const product = handle.replace(/-/g, ' ');
-  const summary = `✅ Order Confirmed!\n\n🧾 Product: *${product}*\n📦 Qty: *${quantity}*\n👤 Name: *${name}*\n🏪 Shop: *${shop}*\n📍 Address: *${address}*`;
-
-  await sendText(phone, summary);
-
-  console.log("📝 ORDER:", {
-    phone, product, quantity, name, shop, address
+const sendButtons = async (phone, text, buttons) => {
+  await axios.post(`https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`, {
+    messaging_product: 'whatsapp',
+    to: phone,
+    type: 'interactive',
+    interactive: {
+      type: 'button',
+      body: { text },
+      action: { buttons }
+    }
+  }, {
+    headers: {
+      Authorization: `Bearer ${ACCESS_TOKEN}`,
+      'Content-Type': 'application/json'
+    }
   });
+};
 
-  // TODO: Push to Google Sheet or Database if needed
-}
+const createRazorpayOrder = async (amount, receipt) => {
+  const auth = Buffer.from(`${RAZORPAY_API_KEY}:${RAZORPAY_API_SECRET}`).toString('base64');
+  const response = await axios.post('https://api.razorpay.com/v1/orders', {
+    amount: amount * 100,
+    currency: 'INR',
+    receipt,
+    payment_capture: 1
+  }, {
+    headers: {
+      Authorization: `Basic ${auth}`,
+      'Content-Type': 'application/json'
+    }
+  });
+  return response.data;
+};
 
-// Meta webhook verification
+const confirmOrder = async (phone, handle, quantity, name, shop, address, paymentMethod) => {
+  const product = handle.replace(/-/g, ' ');
+  const summary = `✅ Order Confirmed!
+
+🧾 Product: *${product}*
+📦 Qty: *${quantity}*
+👤 Name: *${name}*
+🏪 Shop: *${shop}*
+📍 Address: *${address}*
+💳 Payment: *${paymentMethod}*`;
+  await sendText(phone, summary);
+  console.log("📝 ORDER:", { phone, product, quantity, name, shop, address, paymentMethod });
+};
+
+app.post('/webhook', async (req, res) => {
+  const message = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
+  const phone = message?.from;
+  const userMessage = message?.text?.body || '';
+  const buttonId = message?.interactive?.button_reply?.id;
+
+  if (!phone) return res.sendStatus(200);
+  const session = userSessions[phone] || {};
+  const profile = userProfiles[phone];
+
+  if (buttonId?.startsWith('order_')) {
+    const handle = buttonId.replace('order_', '');
+    userSessions[phone] = { step: 'awaiting_quantity', productHandle: handle };
+    await sendText(phone, `How many kg or boxes of *${handle.replace(/-/g, ' ')}* would you like to order?`);
+    return res.sendStatus(200);
+  }
+
+  if (session.step === 'awaiting_quantity') {
+    userSessions[phone].quantity = userMessage;
+    if (profile) {
+      await sendButtons(phone, `You've ordered as *${profile.name}* from *${profile.shop}* 📍 *${profile.address}*.
+Use these details?`, [
+        { type: 'reply', reply: { id: 'use_saved', title: '✅ Yes' } },
+        { type: 'reply', reply: { id: 'update_info', title: '✏️ Update' } }
+      ]);
+      session.step = 'confirm_saved_info';
+    } else {
+      session.step = 'awaiting_name';
+      await sendText(phone, `Please enter your full name:`);
+    }
+    return res.sendStatus(200);
+  }
+
+  if (buttonId === 'use_saved') {
+    session.name = profile.name;
+    session.shop = profile.shop;
+    session.address = profile.address;
+    session.step = 'awaiting_payment_method';
+    await sendButtons(phone, `How would you like to pay?`, [
+      { type: 'reply', reply: { id: 'pay_cod', title: '💸 Cash on Delivery' } },
+      { type: 'reply', reply: { id: 'pay_online', title: '💳 Online (UPI)' } }
+    ]);
+    return res.sendStatus(200);
+  }
+
+  if (buttonId === 'update_info' || session.step === 'awaiting_name') {
+    session.name = userMessage;
+    session.step = 'awaiting_shop';
+    await sendText(phone, `Thanks, ${userMessage}. Now enter your shop name:`);
+    return res.sendStatus(200);
+  }
+
+  if (session.step === 'awaiting_shop') {
+    session.shop = userMessage;
+    session.step = 'awaiting_address';
+    await sendText(phone, `Great! Now share your delivery address:`);
+    return res.sendStatus(200);
+  }
+
+  if (session.step === 'awaiting_address') {
+    session.address = userMessage;
+    userProfiles[phone] = {
+      name: session.name,
+      shop: session.shop,
+      address: session.address
+    };
+    session.step = 'awaiting_payment_method';
+    await sendButtons(phone, `How would you like to pay?`, [
+      { type: 'reply', reply: { id: 'pay_cod', title: '💸 Cash on Delivery' } },
+      { type: 'reply', reply: { id: 'pay_online', title: '💳 Online (UPI)' } }
+    ]);
+    return res.sendStatus(200);
+  }
+
+  if (buttonId === 'pay_cod') {
+    await confirmOrder(phone, session.productHandle, session.quantity, session.name, session.shop, session.address, 'Cash on Delivery');
+    delete userSessions[phone];
+    return res.sendStatus(200);
+  }
+
+  if (buttonId === 'pay_online') {
+    const amount = parseFloat(session.quantity) * 10; // adjust pricing logic
+    const order = await createRazorpayOrder(amount, uuidv4());
+    const paymentLink = `https://rzp.io/i/${order.id}`; // optional: real payment link
+    await sendText(phone, `💳 Please complete your payment here:
+${paymentLink}
+
+Once done, our team will contact you to confirm delivery.`);
+    await confirmOrder(phone, session.productHandle, session.quantity, session.name, session.shop, session.address, 'Online Payment (UPI)');
+    delete userSessions[phone];
+    return res.sendStatus(200);
+  }
+
+  const greetings = ["hi", "hello", "hey", "namaste"];
+  if (greetings.some(g => userMessage.toLowerCase().includes(g))) {
+    await sendText(phone, `👋 Hello! Welcome to *Kosac* – your eco-friendly packaging partner. Type product names like "kraft bags" or "silver container" to start ordering.`);
+    return res.sendStatus(200);
+  }
+
+  const matches = await getMatchingProducts(userMessage);
+  if (matches.length > 0) {
+    for (let p of matches.slice(0, 5)) {
+      const isBoxUnit = /cup|straw/i.test(p.title);
+      const unit = isBoxUnit ? "box" : "kg";
+      await axios.post(`https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`, {
+        messaging_product: 'whatsapp',
+        to: phone,
+        type: 'interactive',
+        interactive: {
+          type: 'button',
+          body: { text: `🛍️ *${p.title}*\n💵 ₹${p.price}/${unit}\n🔗 https://kosac.in/products/${p.handle}` },
+          action: {
+            buttons: [
+              { type: 'reply', reply: { id: `order_${p.handle}`, title: '🛒 Order This' } }
+            ]
+          }
+        }
+      }, {
+        headers: {
+          Authorization: `Bearer ${ACCESS_TOKEN}`,
+          'Content-Type': 'application/json'
+        }
+      });
+    }
+    return res.sendStatus(200);
+  } else {
+    await sendText(phone, `❌ Sorry, no products found. Try again.`);
+    return res.sendStatus(200);
+  }
+});
+
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
-
-  if (mode && token === VERIFY_TOKEN) {
-    console.log("✅ Webhook verified");
-    res.status(200).send(challenge);
-  } else {
-    res.sendStatus(403);
-  }
+  if (mode && token === VERIFY_TOKEN) res.status(200).send(challenge);
+  else res.sendStatus(403);
 });
 
 app.listen(port, () => {
-  console.log(`🚀 WhatsApp bot running at http://localhost:${port}`);
+  console.log(`🚀 WhatsApp bot running on port ${port}`);
 });
