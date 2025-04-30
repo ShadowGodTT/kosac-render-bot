@@ -102,11 +102,11 @@ const confirmOrder = async (phone, handle, quantity, name, shop, address, paymen
   const summary = `✅ Order Confirmed!
 
 🧾 Product: *${product}*
-📦 Qty: *${quantity}*
+📦 Quantity: *${quantity}*
 👤 Name: *${name}*
 🏪 Shop: *${shop}*
 📍 Address: *${address}*
-💳 Payment: *${paymentMethod}*`;
+💳 Payment Method: *${paymentMethod}*`;
   await sendText(phone, summary);
   console.log("📝 ORDER:", { phone, product, quantity, name, shop, address, paymentMethod });
 };
@@ -124,22 +124,25 @@ app.post('/webhook', async (req, res) => {
   if (buttonId?.startsWith('order_')) {
     const handle = buttonId.replace('order_', '');
     userSessions[phone] = { step: 'awaiting_quantity', productHandle: handle };
-    await sendText(phone, `How many kg or boxes of *${handle.replace(/-/g, ' ')}* would you like to order?`);
+    await sendText(phone, `Please enter the quantity (in kg or boxes) for *${handle.replace(/-/g, ' ')}*:`);
     return res.sendStatus(200);
   }
 
   if (session.step === 'awaiting_quantity') {
-    userSessions[phone].quantity = userMessage;
+    session.quantity = userMessage;
     if (profile) {
-      await sendButtons(phone, `You've ordered as *${profile.name}* from *${profile.shop}* 📍 *${profile.address}*.
-Use these details?`, [
-        { type: 'reply', reply: { id: 'use_saved', title: '✅ Yes' } },
-        { type: 'reply', reply: { id: 'update_info', title: '✏️ Update' } }
+      await sendButtons(phone, `Previously saved details:
+👤 *${profile.name}*
+🏪 *${profile.shop}*
+📍 *${profile.address}*
+Would you like to continue with these?`, [
+        { type: 'reply', reply: { id: 'use_saved', title: '✅ Use Same' } },
+        { type: 'reply', reply: { id: 'update_info', title: '✏️ Update Info' } }
       ]);
       session.step = 'confirm_saved_info';
     } else {
       session.step = 'awaiting_name';
-      await sendText(phone, `Please enter your full name:`);
+      await sendText(phone, `Let's proceed. Please enter your full name:`);
     }
     return res.sendStatus(200);
   }
@@ -149,7 +152,7 @@ Use these details?`, [
     session.shop = profile.shop;
     session.address = profile.address;
     session.step = 'awaiting_payment_method';
-    await sendButtons(phone, `How would you like to pay?`, [
+    await sendButtons(phone, `Select your preferred payment method:`, [
       { type: 'reply', reply: { id: 'pay_cod', title: '💸 Cash on Delivery' } },
       { type: 'reply', reply: { id: 'pay_online', title: '💳 Online (UPI)' } }
     ]);
@@ -166,7 +169,7 @@ Use these details?`, [
   if (session.step === 'awaiting_shop') {
     session.shop = userMessage;
     session.step = 'awaiting_address';
-    await sendText(phone, `Great! Now share your delivery address:`);
+    await sendText(phone, `Great. Lastly, please provide your delivery address:`);
     return res.sendStatus(200);
   }
 
@@ -178,7 +181,7 @@ Use these details?`, [
       address: session.address
     };
     session.step = 'awaiting_payment_method';
-    await sendButtons(phone, `How would you like to pay?`, [
+    await sendButtons(phone, `Select your preferred payment method:`, [
       { type: 'reply', reply: { id: 'pay_cod', title: '💸 Cash on Delivery' } },
       { type: 'reply', reply: { id: 'pay_online', title: '💳 Online (UPI)' } }
     ]);
@@ -192,21 +195,28 @@ Use these details?`, [
   }
 
   if (buttonId === 'pay_online') {
-    const amount = parseFloat(session.quantity) * 10; // adjust pricing logic
+    const amount = parseFloat(session.quantity) * 10; // Placeholder pricing logic
     const order = await createRazorpayOrder(amount, uuidv4());
-    const paymentLink = `https://rzp.io/i/${order.id}`; // optional: real payment link
-    await sendText(phone, `💳 Please complete your payment here:
+    const paymentLink = `https://rzp.io/i/${order.id}`;
+    await sendText(phone, `💳 Please complete your payment using the link below:
 ${paymentLink}
 
-Once done, our team will contact you to confirm delivery.`);
-    await confirmOrder(phone, session.productHandle, session.quantity, session.name, session.shop, session.address, 'Online Payment (UPI)');
+Once payment is done, our team will proceed with delivery.`);
+    await confirmOrder(phone, session.productHandle, session.quantity, session.name, session.shop, session.address, 'Online (UPI)');
     delete userSessions[phone];
     return res.sendStatus(200);
   }
 
   const greetings = ["hi", "hello", "hey", "namaste"];
   if (greetings.some(g => userMessage.toLowerCase().includes(g))) {
-    await sendText(phone, `👋 Hello! Welcome to *Kosac* – your eco-friendly packaging partner. Type product names like "kraft bags" or "silver container" to start ordering.`);
+    await sendText(phone, `👋 Hello! Welcome to *Kosac* – your eco-friendly packaging partner.
+
+Explore our best-selling products:
+• Paper Bags
+• Paper Cups
+• Kraft Packaging
+
+Just type a product name to begin your order.`);
     return res.sendStatus(200);
   }
 
@@ -237,7 +247,7 @@ Once done, our team will contact you to confirm delivery.`);
     }
     return res.sendStatus(200);
   } else {
-    await sendText(phone, `❌ Sorry, no products found. Try again.`);
+    await sendText(phone, `❌ Sorry, no matching products found. Try another product name.`);
     return res.sendStatus(200);
   }
 });
@@ -251,5 +261,5 @@ app.get('/webhook', (req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`🚀 WhatsApp bot running on port ${port}`);
+  console.log(`🚀 Kosac WhatsApp bot live on port ${port}`);
 });
