@@ -14,7 +14,7 @@ const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 const embeddingsPath = path.join(__dirname, 'product-embeddings.json');
-const productData = require('./product-data.json');
+const productData = require(path.join(__dirname, 'product-data.json'));
 const productEmbeddings = require(embeddingsPath);
 
 app.use(express.json());
