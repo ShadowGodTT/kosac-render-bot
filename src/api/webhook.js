@@ -13,7 +13,8 @@ const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
 const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 const SHOPIFY_STORE_URL = process.env.SHOPIFY_STORE_URL;
 
-const userSessions = {}; // temporary in-memory session store
+const userSessions = {};  // Tracks current order session step
+const userProfiles = {};  // Stores saved name, shop, address
 
 app.use(express.json());
 
@@ -23,9 +24,7 @@ const getMatchingProducts = async (userMessage) => {
 
   try {
     const response = await axios.get(`${SHOPIFY_STORE_URL}/admin/api/2023-01/products.json`, {
-      headers: {
-        'X-Shopify-Access-Token': SHOPIFY_ACCESS_TOKEN,
-      }
+      headers: { 'X-Shopify-Access-Token': SHOPIFY_ACCESS_TOKEN }
     });
 
     const products = response.data.products;
@@ -56,114 +55,102 @@ app.post('/webhook', async (req, res) => {
 
   if (!phoneNumber) return res.sendStatus(200);
 
+  const session = userSessions[phoneNumber] || {};
+  const profile = userProfiles[phoneNumber];
+
   // 🟢 Greeting
   const greetings = ["hi", "hello", "hey", "namaste", "good morning", "good evening"];
   if (greetings.some(greet => userMessage.toLowerCase().includes(greet))) {
     const greetingReply = `👋 Hello! Welcome to *Kosac* – your eco-friendly packaging partner.\n\nYou can type things like:\n• kraft bags\n• silver container\n• paper bowls\n• paper cups\n• straws\n\nI'll help you find the right product instantly!`;
 
-    await axios.post(`https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`, {
-      messaging_product: 'whatsapp',
-      to: phoneNumber,
-      text: { body: greetingReply }
-    }, {
-      headers: {
-        Authorization: `Bearer ${ACCESS_TOKEN}`,
-        'Content-Type': 'application/json'
-      }
-    });
-
+    await sendText(phoneNumber, greetingReply);
     return res.sendStatus(200);
   }
 
-  // 🛒 Button tapped: "Order This"
+  // 🛒 Button tapped
   if (buttonId && buttonId.startsWith('order_')) {
     const handle = buttonId.replace('order_', '');
-
     userSessions[phoneNumber] = {
       step: 'awaiting_quantity',
       productHandle: handle
     };
 
-    await axios.post(`https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`, {
-      messaging_product: 'whatsapp',
-      to: phoneNumber,
-      text: {
-        body: `How many kg or boxes of *${handle.replace(/-/g, ' ')}* would you like to order?`
-      }
-    }, {
-      headers: {
-        Authorization: `Bearer ${ACCESS_TOKEN}`,
-        'Content-Type': 'application/json'
-      }
-    });
-
+    await sendText(phoneNumber, `How many kg or boxes of *${handle.replace(/-/g, ' ')}* would you like to order?`);
     return res.sendStatus(200);
   }
 
-  // 🧮 Quantity response
-  if (userSessions[phoneNumber]?.step === 'awaiting_quantity') {
+  // Step: quantity
+  if (session.step === 'awaiting_quantity') {
     userSessions[phoneNumber].quantity = userMessage;
-    userSessions[phoneNumber].step = 'awaiting_address';
 
-    await axios.post(`https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`, {
-      messaging_product: 'whatsapp',
-      to: phoneNumber,
-      text: {
-        body: `Got it! Now please share your delivery address.`
-      }
-    }, {
-      headers: {
-        Authorization: `Bearer ${ACCESS_TOKEN}`,
-        'Content-Type': 'application/json'
-      }
-    });
+    if (userProfiles[phoneNumber]) {
+      const p = userProfiles[phoneNumber];
+      await sendText(phoneNumber,
+        `You've previously ordered as *${p.name}* from *${p.shop}*, 📍 *${p.address}*.\nWould you like to use these saved details?\n\nReply:\n✅ Yes - to use same details\n✏️ Update - to enter new ones`);
+      session.step = 'confirm_saved_info';
+    } else {
+      session.step = 'awaiting_name';
+      await sendText(phoneNumber, `Please enter your full name:`);
+    }
 
     return res.sendStatus(200);
   }
 
-  // 📍 Address response + order confirmation
-  if (userSessions[phoneNumber]?.step === 'awaiting_address') {
-    userSessions[phoneNumber].address = userMessage;
-    const { productHandle, quantity, address } = userSessions[phoneNumber];
+  // Step: use saved info or update
+  if (session.step === 'confirm_saved_info') {
+    const msg = userMessage.toLowerCase();
+    if (msg.includes("yes")) {
+      const { productHandle, quantity } = session;
+      const { name, shop, address } = profile;
 
-    const productName = productHandle.replace(/-/g, ' ');
+      await confirmOrder(phoneNumber, productHandle, quantity, name, shop, address);
+      delete userSessions[phoneNumber];
+      return res.sendStatus(200);
+    } else {
+      session.step = 'awaiting_name';
+      await sendText(phoneNumber, `No problem! Please enter your full name:`);
+      return res.sendStatus(200);
+    }
+  }
 
-    await axios.post(`https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`, {
-      messaging_product: 'whatsapp',
-      to: phoneNumber,
-      text: {
-        body: `✅ Your order for *${quantity}* of *${productName}* has been placed!\n📍 Address: ${address}\n\nOur team will contact you soon. Thank you! 🙏`
-      }
-    }, {
-      headers: {
-        Authorization: `Bearer ${ACCESS_TOKEN}`,
-        'Content-Type': 'application/json'
-      }
-    });
+  // Step: name
+  if (session.step === 'awaiting_name') {
+    session.name = userMessage;
+    session.step = 'awaiting_shop';
+    await sendText(phoneNumber, `Thanks, ${userMessage}. Now please enter your *shop name*:`);
+    return res.sendStatus(200);
+  }
 
-    // Optionally log or forward to your team here
-    console.log("📝 NEW ORDER:", {
-      phone: phoneNumber,
-      product: productName,
-      quantity,
-      address
-    });
+  // Step: shop
+  if (session.step === 'awaiting_shop') {
+    session.shop = userMessage;
+    session.step = 'awaiting_address';
+    await sendText(phoneNumber, `And finally, enter your *delivery address*:`);
+    return res.sendStatus(200);
+  }
 
+  // Step: address + confirm order
+  if (session.step === 'awaiting_address') {
+    session.address = userMessage;
+    const { productHandle, quantity, name, shop, address } = session;
+
+    // Save profile
+    userProfiles[phoneNumber] = { name, shop, address };
+
+    await confirmOrder(phoneNumber, productHandle, quantity, name, shop, address);
     delete userSessions[phoneNumber];
-
     return res.sendStatus(200);
   }
 
-  // 🔍 Search products if not in a session
+  // Default: product search
   try {
     const matches = await getMatchingProducts(userMessage);
-
     if (matches.length > 0) {
       for (let p of matches.slice(0, 5)) {
         const isBoxUnit = /cup|straw/i.test(p.title);
         const unit = isBoxUnit ? "box" : "kg";
 
-        const buttonPayload = {
+        await axios.post(`https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`, {
           messaging_product: 'whatsapp',
           to: phoneNumber,
           type: 'interactive',
@@ -184,31 +171,16 @@ app.post('/webhook', async (req, res) => {
               ]
             }
           }
-        };
-
-        await axios.post(`https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`, buttonPayload, {
+        }, {
           headers: {
             Authorization: `Bearer ${ACCESS_TOKEN}`,
             'Content-Type': 'application/json'
           }
         });
       }
-
       return res.sendStatus(200);
     } else {
-      const notFound = `❌ Sorry, I couldn’t find any matching product for “${userMessage}”. Try something like "kraft bag", "paper bowl", or "container".`;
-
-      await axios.post(`https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`, {
-        messaging_product: 'whatsapp',
-        to: phoneNumber,
-        text: { body: notFound }
-      }, {
-        headers: {
-          Authorization: `Bearer ${ACCESS_TOKEN}`,
-          'Content-Type': 'application/json'
-        }
-      });
-
+      await sendText(phoneNumber, `❌ No matching product found for “${userMessage}”. Try something like "kraft bag", "paper bowl", or "container".`);
       return res.sendStatus(200);
     }
   } catch (error) {
@@ -217,7 +189,35 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-// 🔐 Meta webhook verification
+// Send plain text message
+async function sendText(phone, text) {
+  await axios.post(`https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`, {
+    messaging_product: 'whatsapp',
+    to: phone,
+    text: { body: text }
+  }, {
+    headers: {
+      Authorization: `Bearer ${ACCESS_TOKEN}`,
+      'Content-Type': 'application/json'
+    }
+  });
+}
+
+// Confirm order
+async function confirmOrder(phone, handle, quantity, name, shop, address) {
+  const product = handle.replace(/-/g, ' ');
+  const summary = `✅ Order Confirmed!\n\n🧾 Product: *${product}*\n📦 Qty: *${quantity}*\n👤 Name: *${name}*\n🏪 Shop: *${shop}*\n📍 Address: *${address}*`;
+
+  await sendText(phone, summary);
+
+  console.log("📝 ORDER:", {
+    phone, product, quantity, name, shop, address
+  });
+
+  // TODO: Push to Google Sheet or Database if needed
+}
+
+// Meta webhook verification
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
