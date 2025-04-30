@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: kosac-webhook
+    env: node
+    rootDir: src/api
+    buildCommand: npm install
+    startCommand: node webhook.js
+    envVars:
+      - key: PORT
+        value: 3000
