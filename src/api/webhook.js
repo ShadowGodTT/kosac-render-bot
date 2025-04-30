@@ -17,10 +17,11 @@ const SHOPIFY_STORE_URL = process.env.SHOPIFY_STORE_URL;
 app.use(express.json());
 
 /**
- * 🧠 Get matching products from Shopify
+ * 🧠 Get loosely matching products from Shopify
  */
 const getMatchingProducts = async (userMessage) => {
   const message = userMessage.toLowerCase();
+  const keywords = message.split(" ").filter(Boolean);
 
   try {
     const response = await axios.get(`${SHOPIFY_STORE_URL}/admin/api/2023-01/products.json`, {
@@ -31,12 +32,15 @@ const getMatchingProducts = async (userMessage) => {
 
     const products = response.data.products;
 
-    // Filter matching products based on title or description
     const matchedProducts = products
       .filter(product => {
         const title = product.title?.toLowerCase() || '';
         const desc = product.body_html?.toLowerCase() || '';
-        return title.includes(message) || desc.includes(message);
+
+        // Match if any keyword exists in title or description
+        return keywords.some(word =>
+          title.includes(word) || desc.includes(word)
+        );
       })
       .map(product => ({
         title: product.title,
@@ -44,6 +48,7 @@ const getMatchingProducts = async (userMessage) => {
         price: product.variants?.[0]?.price || "N/A"
       }));
 
+    console.log("✅ Matching products found:", matchedProducts.length);
     return matchedProducts;
   } catch (err) {
     console.error("❌ Shopify fetch error:", err.response?.data || err.message);
@@ -77,10 +82,10 @@ app.post('/webhook', async (req, res) => {
       }
     });
 
-    return res.sendStatus(200); // Stop further processing
+    return res.sendStatus(200);
   }
 
-  // 🔍 Product match search
+  // 🔍 Search for matching products
   try {
     const matches = await getMatchingProducts(userMessage);
 
@@ -104,7 +109,7 @@ app.post('/webhook', async (req, res) => {
 
       return res.sendStatus(200);
     } else {
-      const notFound = `❌ Sorry, I couldn’t find any matching product for “${userMessage}”. Try typing a more specific name like "kraft bag" or "paper bowl".`;
+      const notFound = `❌ Sorry, I couldn’t find any matching product for “${userMessage}”. Try something like "kraft bag", "paper bowl", or "container".`;
 
       await axios.post(`https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`, {
         messaging_product: 'whatsapp',
@@ -126,7 +131,7 @@ app.post('/webhook', async (req, res) => {
 });
 
 /**
- * 🟢 Webhook verification (Meta setup)
+ * 🟢 Webhook verification for Meta setup
  */
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
