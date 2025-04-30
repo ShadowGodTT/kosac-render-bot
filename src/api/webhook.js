@@ -7,7 +7,7 @@ require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 
 const app = express();
 const port = process.env.PORT || 3000;
-
+/
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'kosac123';
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
