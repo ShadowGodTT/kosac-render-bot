@@ -2,7 +2,7 @@ const express = require('express');
 const axios = require('axios');
 const path = require('path');
 
-// ✅ Load environment variables from root .env
+// ✅ Load .env from root even if running from /src/api
 require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 
 const app = express();
@@ -35,9 +35,7 @@ const getMatchingProducts = async (userMessage) => {
     const matchedProducts = products
       .filter(product => {
         const title = product.title?.toLowerCase() || '';
-        return keywords.some(word =>
-          title.includes(word)
-        );
+        return keywords.some(word => title.includes(word));
       })
       .map(product => ({
         title: product.title,
@@ -82,30 +80,45 @@ app.post('/webhook', async (req, res) => {
     return res.sendStatus(200);
   }
 
-  // 🔍 Product Search
+  // 🔍 Product Search + Send each as a button
   try {
     const matches = await getMatchingProducts(userMessage);
 
     if (matches.length > 0) {
-      let reply = `Here are some products matching “${userMessage}”:\n\n`;
-
-      matches.slice(0, 5).forEach((p, index) => {
+      for (let p of matches.slice(0, 5)) {
         const isBoxUnit = /cup|straw/i.test(p.title);
         const unit = isBoxUnit ? "box" : "kg";
 
-        reply += `${index + 1}️⃣ *${p.title}* – ₹${p.price}/${unit}\n🔗 https://kosac.in/products/${p.handle}\n\n`;
-      });
+        const buttonPayload = {
+          messaging_product: 'whatsapp',
+          to: phoneNumber,
+          type: 'interactive',
+          interactive: {
+            type: 'button',
+            body: {
+              text: `🛍️ *${p.title}*\n💵 ₹${p.price}/${unit}\n🔗 https://kosac.in/products/${p.handle}`
+            },
+            action: {
+              buttons: [
+                {
+                  type: 'reply',
+                  reply: {
+                    id: `order_${p.handle}`,
+                    title: '🛒 Order This'
+                  }
+                }
+              ]
+            }
+          }
+        };
 
-      await axios.post(`https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`, {
-        messaging_product: 'whatsapp',
-        to: phoneNumber,
-        text: { body: reply }
-      }, {
-        headers: {
-          Authorization: `Bearer ${ACCESS_TOKEN}`,
-          'Content-Type': 'application/json'
-        }
-      });
+        await axios.post(`https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`, buttonPayload, {
+          headers: {
+            Authorization: `Bearer ${ACCESS_TOKEN}`,
+            'Content-Type': 'application/json'
+          }
+        });
+      }
 
       return res.sendStatus(200);
     } else {
