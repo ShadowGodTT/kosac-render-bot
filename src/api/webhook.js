@@ -107,7 +107,14 @@ const confirmOrder = async (phone, handle, quantity, name, shop, address, paymen
 🏪 Shop: *${shop}*
 📍 Address: *${address}*
 💳 Payment Method: *${paymentMethod}*`;
+
   await sendText(phone, summary);
+
+  userProfiles[phone] = {
+    ...userProfiles[phone],
+    name, shop, address, productHandle: handle, quantity
+  };
+
   console.log("📝 ORDER:", { phone, product, quantity, name, shop, address, paymentMethod });
 };
 
@@ -121,10 +128,30 @@ app.post('/webhook', async (req, res) => {
   const session = userSessions[phone] || {};
   const profile = userProfiles[phone];
 
+  // Main Menu Button Handlers
+  if (buttonId === 'view_products') {
+    await sendText(phone, `Great! Please type the product name you're looking for (e.g., "kraft bag", "paper cup 250ml")`);
+    return res.sendStatus(200);
+  }
+
+  if (buttonId === 'reorder') {
+    if (profile?.productHandle && profile?.quantity) {
+      await confirmOrder(phone, profile.productHandle, profile.quantity, profile.name, profile.shop, profile.address, 'Cash on Delivery');
+    } else {
+      await sendText(phone, `No past order found. Please type the product name to start a new order.`);
+    }
+    return res.sendStatus(200);
+  }
+
+  if (buttonId === 'talk_to_agent') {
+    await sendText(phone, `👨‍💼 A Kosac team member will contact you shortly. You can also call us at +91 93701 94201 if urgent.`);
+    return res.sendStatus(200);
+  }
+
   if (buttonId?.startsWith('order_')) {
     const handle = buttonId.replace('order_', '');
     userSessions[phone] = { step: 'awaiting_quantity', productHandle: handle };
-    await sendText(phone, `Please enter the quantity (in kg or boxes) for *${handle.replace(/-/g, ' ')}*:`);
+    await sendText(phone, `Please enter the quantity (in kg or boxes) for *${handle.replace(/-/g, ' ')}*:`);  
     return res.sendStatus(200);
   }
 
@@ -209,14 +236,11 @@ Once payment is done, our team will proceed with delivery.`);
 
   const greetings = ["hi", "hello", "hey", "namaste"];
   if (greetings.some(g => userMessage.toLowerCase().includes(g))) {
-    await sendText(phone, `👋 Hello! Welcome to *Kosac* – your eco-friendly packaging partner.
-
-Explore our best-selling products:
-• Paper Bags
-• Paper Cups
-• Kraft Packaging
-
-Just type a product name to begin your order.`);
+    await sendButtons(phone, `👋 Welcome to *Kosac* – your eco-friendly packaging partner.\n\nWhat would you like to do today?`, [
+      { type: 'reply', reply: { id: 'view_products', title: '🛍 View Products' } },
+      { type: 'reply', reply: { id: 'reorder', title: '🔁 Reorder' } },
+      { type: 'reply', reply: { id: 'talk_to_agent', title: '👨‍💼 Talk to Agent' } }
+    ]);
     return res.sendStatus(200);
   }
 
