@@ -2,7 +2,7 @@ const express = require('express');
 const axios = require('axios');
 const path = require('path');
 
-// ✅ Load environment variables
+// ✅ Load environment variables from root .env
 require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 
 const app = express();
@@ -17,9 +17,9 @@ const SHOPIFY_STORE_URL = process.env.SHOPIFY_STORE_URL;
 app.use(express.json());
 
 /**
- * 🔍 Match user message with live Shopify product list
+ * 🧠 Get matching products from Shopify
  */
-const getBestMatchProduct = async (userMessage) => {
+const getMatchingProducts = async (userMessage) => {
   const message = userMessage.toLowerCase();
 
   try {
@@ -30,40 +30,24 @@ const getBestMatchProduct = async (userMessage) => {
     });
 
     const products = response.data.products;
-    let bestMatch = null;
-    let bestScore = 0;
 
-    for (let product of products) {
-      const title = product.title?.toLowerCase() || '';
-      const desc = product.body_html?.toLowerCase() || '';
+    // Filter matching products based on title or description
+    const matchedProducts = products
+      .filter(product => {
+        const title = product.title?.toLowerCase() || '';
+        const desc = product.body_html?.toLowerCase() || '';
+        return title.includes(message) || desc.includes(message);
+      })
+      .map(product => ({
+        title: product.title,
+        handle: product.handle,
+        price: product.variants?.[0]?.price || "N/A"
+      }));
 
-      // 🔹 Exact phrase match
-      if (title.includes(message) || desc.includes(message)) {
-        return {
-          title: product.title,
-          handle: product.handle,
-          price: product.variants?.[0]?.price || "N/A"
-        };
-      }
-
-      // 🔸 Partial keyword match
-      const keywords = message.split(" ");
-      const matchCount = keywords.filter(word => title.includes(word) || desc.includes(word)).length;
-
-      if (matchCount > bestScore) {
-        bestScore = matchCount;
-        bestMatch = {
-          title: product.title,
-          handle: product.handle,
-          price: product.variants?.[0]?.price || "N/A"
-        };
-      }
-    }
-
-    return bestMatch;
+    return matchedProducts;
   } catch (err) {
     console.error("❌ Shopify fetch error:", err.response?.data || err.message);
-    return null;
+    return [];
   }
 };
 
@@ -77,17 +61,15 @@ app.post('/webhook', async (req, res) => {
 
   if (!phoneNumber) return res.sendStatus(200);
 
-  try {
-    const match = await getBestMatchProduct(userMessage);
-
-    const reply = match
-      ? `🛍️ *${match.title}*\n💵 Price: ₹${match.price}\n🔗 View: https://kosac.in/products/${match.handle}`
-      : `❌ Sorry, I couldn’t find a matching product for “${userMessage}”. Try using a more specific name.`;
+  // 🟢 Greeting Handler
+  const greetings = ["hi", "hello", "hey", "namaste", "good morning", "good evening"];
+  if (greetings.some(greet => userMessage.toLowerCase().includes(greet))) {
+    const greetingReply = `👋 Hello! Welcome to *Kosac* – your eco-friendly packaging partner.\n\nYou can type things like:\n• kraft bags\n• silver container\n• paper bowls\n\nI'll help you find the right product instantly!`;
 
     await axios.post(`https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`, {
       messaging_product: 'whatsapp',
       to: phoneNumber,
-      text: { body: reply }
+      text: { body: greetingReply }
     }, {
       headers: {
         Authorization: `Bearer ${ACCESS_TOKEN}`,
@@ -95,12 +77,52 @@ app.post('/webhook', async (req, res) => {
       }
     });
 
-    console.log('✅ Replied to:', phoneNumber, '| Product:', match?.title || 'No match');
-  } catch (error) {
-    console.error('❌ WhatsApp send error:', error.response?.data || error.message);
+    return res.sendStatus(200); // Stop further processing
   }
 
-  res.sendStatus(200);
+  // 🔍 Product match search
+  try {
+    const matches = await getMatchingProducts(userMessage);
+
+    if (matches.length > 0) {
+      let reply = `Here are some products matching “${userMessage}”:\n\n`;
+
+      matches.slice(0, 5).forEach((p, index) => {
+        reply += `${index + 1}️⃣ *${p.title}* – ₹${p.price}/kg\n🔗 https://kosac.in/products/${p.handle}\n\n`;
+      });
+
+      await axios.post(`https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`, {
+        messaging_product: 'whatsapp',
+        to: phoneNumber,
+        text: { body: reply }
+      }, {
+        headers: {
+          Authorization: `Bearer ${ACCESS_TOKEN}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      return res.sendStatus(200);
+    } else {
+      const notFound = `❌ Sorry, I couldn’t find any matching product for “${userMessage}”. Try typing a more specific name like "kraft bag" or "paper bowl".`;
+
+      await axios.post(`https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`, {
+        messaging_product: 'whatsapp',
+        to: phoneNumber,
+        text: { body: notFound }
+      }, {
+        headers: {
+          Authorization: `Bearer ${ACCESS_TOKEN}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      return res.sendStatus(200);
+    }
+  } catch (error) {
+    console.error('❌ WhatsApp send error:', error.response?.data || error.message);
+    return res.sendStatus(500);
+  }
 });
 
 /**
