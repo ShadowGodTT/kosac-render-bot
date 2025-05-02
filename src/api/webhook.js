@@ -1,3 +1,4 @@
+
 const express = require('express');
 const axios = require('axios');
 const path = require('path');
@@ -10,8 +11,6 @@ const port = process.env.PORT || 3000;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'kosac123';
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
-const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
-const SHOPIFY_STORE_URL = process.env.SHOPIFY_STORE_URL;
 const RAZORPAY_API_KEY = process.env.RAZORPAY_API_KEY;
 const RAZORPAY_API_SECRET = process.env.RAZORPAY_API_SECRET;
 
@@ -21,30 +20,32 @@ const userProfiles = {};
 app.use(express.json());
 
 const getMatchingProducts = async (userMessage) => {
-  const message = userMessage.toLowerCase();
-  const keywords = message.split(" ").filter(Boolean);
+  const sheetUrl = 'https://docs.google.com/spreadsheets/d/1uabyvJ3HzvgVt48wbbdn9uZrf_cGpEWB8o2hp2nteLM/export?format=csv';
+  const keywords = userMessage.toLowerCase().split(" ").filter(Boolean);
 
   try {
-    const response = await axios.get(`${SHOPIFY_STORE_URL}/admin/api/2023-01/products.json`, {
-      headers: { 'X-Shopify-Access-Token': SHOPIFY_ACCESS_TOKEN }
-    });
+    const response = await axios.get(sheetUrl);
+    const lines = response.data.split('\n').slice(1); // skip header
 
-    const products = response.data.products;
+    const products = lines.map(line => {
+      const [name, variantTitle, sku, dimensions, quantity, price, imageUrl, handle] = line.split(',');
+      return {
+        name: name?.trim(),
+        variantTitle: variantTitle?.trim(),
+        price: parseFloat(price?.trim()),
+        image: imageUrl?.trim(),
+        handle: handle?.trim(),
+        unit: (dimensions || '').toLowerCase().includes('cup') ? 'box' : 'kg'
+      };
+    }).filter(p => p.name && p.handle);
 
-    const matchedProducts = products
-      .filter(product => {
-        const title = product.title?.toLowerCase() || '';
-        return keywords.some(word => title.includes(word));
-      })
-      .map(product => ({
-        title: product.title,
-        handle: product.handle,
-        price: product.variants?.[0]?.price || "N/A"
-      }));
+    const matched = products.filter(product =>
+      keywords.some(k => product.variantTitle.toLowerCase().includes(k))
+    );
 
-    return matchedProducts;
+    return matched;
   } catch (err) {
-    console.error("❌ Shopify fetch error:", err.response?.data || err.message);
+    console.error("❌ Failed to fetch sheet data:", err.message);
     return [];
   }
 };
@@ -98,14 +99,7 @@ const createRazorpayOrder = async (amount, receipt) => {
 
 const confirmOrder = async (phone, handle, quantity, name, shop, address, paymentMethod) => {
   const product = handle.replace(/-/g, ' ');
-  const summary = `✅ Order Confirmed!
-
-🧾 Product: *${product}*
-📦 Quantity: *${quantity}*
-👤 Name: *${name}*
-🏪 Shop: *${shop}*
-📍 Address: *${address}*
-💳 Payment Method: *${paymentMethod}*`;
+  const summary = `✅ Order Confirmed!\n\n🧾 Product: *${product}*\n📦 Quantity: *${quantity}*\n👤 Name: *${name}*\n🏪 Shop: *${shop}*\n📍 Address: *${address}*\n💳 Payment Method: *${paymentMethod}*`;
 
   await sendText(phone, summary);
 
@@ -127,26 +121,6 @@ app.post('/webhook', async (req, res) => {
   const session = userSessions[phone] || {};
   const profile = userProfiles[phone];
 
-  // Main Menu Button Handlers
-  if (buttonId === 'view_products') {
-    await sendText(phone, `Great! Please type the product name you're looking for (e.g., "kraft bag", "paper cup 250ml")`);
-    return res.sendStatus(200);
-  }
-
-  if (buttonId === 'reorder') {
-    if (profile?.productHandle && profile?.quantity) {
-      await confirmOrder(phone, profile.productHandle, profile.quantity, profile.name, profile.shop, profile.address, 'Cash on Delivery');
-    } else {
-      await sendText(phone, `No past order found. Please type the product name to start a new order.`);
-    }
-    return res.sendStatus(200);
-  }
-
-  if (buttonId === 'talk_to_agent') {
-    await sendText(phone, `👨‍💼 A Kosac team member will contact you shortly. You can also call us at +91 93701 94201 if urgent.`);
-    return res.sendStatus(200);
-  }
-
   if (buttonId?.startsWith('order_')) {
     const handle = buttonId.replace('order_', '');
     userSessions[phone] = { step: 'awaiting_quantity', productHandle: handle };
@@ -157,11 +131,7 @@ app.post('/webhook', async (req, res) => {
   if (session.step === 'awaiting_quantity') {
     session.quantity = userMessage;
     if (profile) {
-      await sendButtons(phone, `Previously saved details:
-👤 *${profile.name}*
-🏪 *${profile.shop}*
-📍 *${profile.address}*
-Would you like to continue with these?`, [
+      await sendButtons(phone, `Previously saved details:\n👤 *${profile.name}*\n🏪 *${profile.shop}*\n📍 *${profile.address}*\nWould you like to continue with these?`, [
         { type: 'reply', reply: { id: 'use_saved', title: '✅ Use Same' } },
         { type: 'reply', reply: { id: 'update_info', title: '✏️ Update Info' } }
       ]);
@@ -221,13 +191,10 @@ Would you like to continue with these?`, [
   }
 
   if (buttonId === 'pay_online') {
-    const amount = parseFloat(session.quantity) * 10; // Placeholder pricing logic
+    const amount = parseFloat(session.quantity) * 10;
     const order = await createRazorpayOrder(amount, uuidv4());
     const paymentLink = `https://rzp.io/i/${order.id}`;
-    await sendText(phone, `💳 Please complete your payment using the link below:
-${paymentLink}
-
-Once payment is done, our team will proceed with delivery.`);
+    await sendText(phone, `💳 Please complete your payment using the link below:\n${paymentLink}\n\nOnce payment is done, our team will proceed with delivery.`);
     await confirmOrder(phone, session.productHandle, session.quantity, session.name, session.shop, session.address, 'Online (UPI)');
     delete userSessions[phone];
     return res.sendStatus(200);
@@ -246,15 +213,13 @@ Once payment is done, our team will proceed with delivery.`);
   const matches = await getMatchingProducts(userMessage);
   if (matches.length > 0) {
     for (let p of matches.slice(0, 5)) {
-      const isBoxUnit = /cup|straw/i.test(p.title);
-      const unit = isBoxUnit ? "box" : "kg";
       await axios.post(`https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`, {
         messaging_product: 'whatsapp',
         to: phone,
         type: 'interactive',
         interactive: {
           type: 'button',
-          body: { text: `🛍️ *${p.title}*\n💵 ₹${p.price}/${unit}\n🔗 https://kosac.in/products/${p.handle}` },
+          body: { text: `🛍️ *${p.variantTitle}*\n💵 ₹${p.price}/${p.unit}` },
           action: {
             buttons: [
               { type: 'reply', reply: { id: `order_${p.handle}`, title: '🛒 Order This' } }
