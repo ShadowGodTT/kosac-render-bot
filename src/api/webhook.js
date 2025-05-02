@@ -25,7 +25,7 @@ const getMatchingProducts = async (userMessage) => {
 
   try {
     const response = await axios.get(sheetUrl);
-    const lines = response.data.split('\n').slice(1); // skip header
+    const lines = response.data.split('\n').slice(1);
 
     const products = lines.map(line => {
       const [name, variantTitle, sku, dimensions, quantity, price, imageUrl, handle] = line.split(',');
@@ -209,13 +209,15 @@ app.post('/webhook', async (req, res) => {
   const matches = await getMatchingProducts(userMessage);
   if (matches.length > 0) {
     for (let p of matches.slice(0, 5)) {
+      const priceUnit = p.unit;
+      const caption = `🛍️ *${p.variantTitle}*\n💰 ₹${p.price}/${priceUnit}\n📦 Available Now!\n\n👇 Tap below to order`;
+
+      // 1. Image
       await axios.post(`https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`, {
         messaging_product: 'whatsapp',
         to: phone,
         type: 'image',
-        image: {
-          link: p.image
-        }
+        image: { link: p.image }
       }, {
         headers: {
           Authorization: `Bearer ${ACCESS_TOKEN}`,
@@ -223,13 +225,14 @@ app.post('/webhook', async (req, res) => {
         }
       });
 
+      // 2. Text + Button
       await axios.post(`https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`, {
         messaging_product: 'whatsapp',
         to: phone,
         type: 'interactive',
         interactive: {
           type: 'button',
-          body: { text: `🛍️ *${p.variantTitle}*\n💵 ₹${p.price}/${p.unit}` },
+          body: { text: caption },
           action: {
             buttons: [
               { type: 'reply', reply: { id: `order_${p.handle}`, title: '🛒 Order This' } }
