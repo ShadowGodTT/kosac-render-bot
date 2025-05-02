@@ -35,7 +35,7 @@ const getMatchingProducts = async (userMessage) => {
         price: parseFloat(price?.trim()),
         image: imageUrl?.trim(),
         handle: handle?.trim(),
-        unit: (dimensions || '').toLowerCase().includes('cup') ? 'box' : 'kg'
+        unit: /cup|straw/i.test(variantTitle || '') ? 'box' : 'kg'
       };
     }).filter(p => p.name && p.handle);
 
@@ -202,17 +202,27 @@ app.post('/webhook', async (req, res) => {
 
   const greetings = ["hi", "hello", "hey", "namaste"];
   if (greetings.some(g => userMessage.toLowerCase().includes(g))) {
-    await sendButtons(phone, `👋 Welcome to *Kosac* – your eco-friendly packaging partner.\n\nWhat would you like to do today?`, [
-      { type: 'reply', reply: { id: 'view_products', title: '🛍 View Products' } },
-      { type: 'reply', reply: { id: 'reorder', title: '🔁 Reorder' } },
-      { type: 'reply', reply: { id: 'talk_to_agent', title: '👨‍💼 Talk to Agent' } }
-    ]);
+    await sendText(phone, `👋 Welcome to *Kosac* – your eco-friendly packaging partner!\n\nType a product name to view options.\nFor example:\n• kraft bag 5kg\n• cup 250ml\n• paper straw`);
     return res.sendStatus(200);
   }
 
   const matches = await getMatchingProducts(userMessage);
   if (matches.length > 0) {
     for (let p of matches.slice(0, 5)) {
+      await axios.post(`https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`, {
+        messaging_product: 'whatsapp',
+        to: phone,
+        type: 'image',
+        image: {
+          link: p.image
+        }
+      }, {
+        headers: {
+          Authorization: `Bearer ${ACCESS_TOKEN}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
       await axios.post(`https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`, {
         messaging_product: 'whatsapp',
         to: phone,
